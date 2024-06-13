@@ -1,0 +1,639 @@
+---
+title: "Data & Power Sims"
+author: "Emmanuel Guizar Rosales"
+format: 
+  dashboard:
+    orientation: rows
+server: shiny
+---
+
+```{r}
+#| context: setup
+
+library(shiny)
+library(tidyverse)
+library(faux)
+library(lme4)
+library(lmerTest)
+library(ggdist)
+library(sjPlot)
+library(broom.mixed)
+library(bslib)
+library(bsicons)
+
+# define text size for use in ggplots theme(text = element_text(size = TEXT_SIZE))
+TEXT_SIZE <- 20
+
+# define data simulation function
+FUN_sim_dtCarbon <- function(
+  n_subj       =         50, # number of subjects
+  n_subj_prop  =  c(.5, .5), # proportion of republican and democrat subjects
+  n_trial       =        25, # number of trials
+  beta_0     =          3.5, # intercept (grand mean) for dwell time (dt) carbon
+  beta_p     =          .10, # effect of political orientation on dt carbon
+  subj_0     =          .50, # by-subject random intercept sd for dt carbon
+  trial_0    =          .50, # by-trial random intercept sd
+  sigma     =           .10, # residual (error) sd
+  
+  truncNegNums =       TRUE # should negative number be truncuated at zero?
+) {
+  
+  # simulate data for dwell time on carbon information
+  dataSim <- 
+    # add random factor subject
+    add_random(subj = n_subj) %>% 
+    # add random factor trial
+    add_random(trial = n_trial) %>% 
+    # add between-subject factor political orientation (with anova contrast)
+    add_between("subj", polOri = c("rep", "dem"), .prob = n_subj_prop*n_subj, .shuffle = FALSE) %>% 
+    add_contrast("polOri", colnames = "X_p", contrast = "anova") %>% 
+    # add by-subject random intercept
+    add_ranef("subj", S_0 = subj_0) %>% 
+    # add by-trial random intercept
+    add_ranef("trial", T_0 = trial_0) %>% 
+    # add error term
+    add_ranef(e_st = sigma) %>% 
+    # add response values
+    mutate(
+      # add together fixed and random effects for each effect
+      B_0 = beta_0 + S_0 + T_0,
+      B_p = beta_p,
+      # calculate dv by adding each effect term multiplied by the relevant
+      # effect-coded factors and adding the error term
+      dwellTime = B_0 + (B_p * X_p) + e_st
+    )
+  
+  # truncuate negative dwell times
+  if(truncNegNums) {
+    dataSim <- dataSim %>% 
+      mutate(dwellTime = if_else(dwellTime < 0, 0, dwellTime))
+  }
+  
+  # run a linear mixed effects model and check summary
+  mod <- lmer(
+    dwellTime ~ polOri + (1 | subj) + (1 | trial),
+    data = dataSim
+  )
+  mod.sum <- summary(mod)
+  
+  # get results in tidy format
+  mod.broom <- broom.mixed::tidy(mod)
+  
+  return(list(
+    dataSim = dataSim,
+    modelLmer = mod,
+    modelResults = mod.broom
+  ))
+  
+}
+
+# define power simulation function
+FUN_powerSim <- function(
+  n_sim        =         10, # number of simulations
+  n_subj       =         50, # number of subjects
+  n_subj_prop  =  c(.5, .5), # proportion of republican and democrat subjects
+  n_trial       =        25, # number of trials
+  beta_0     =          3.5, # intercept (grand mean) for dwell time (dt) carbon
+  beta_p     =          .10, # effect of political orientation on dt carbon
+  subj_0     =          .50, # by-subject random intercept sd for dt carbon
+  trial_0    =          .50, # by-trial random intercept sd
+  sigma     =           .10, # residual (error) sd
+  
+  truncNegNums =       TRUE # should negative number be truncuated at zero?
+) {
+  
+  # simulate data
+  sim <- FUN_sim_dtCarbon(
+    n_subj = n_subj,
+    n_subj_prop = n_subj_prop,
+    n_trial = n_trial,
+    beta_0 = beta_0,
+    beta_p = beta_p,
+    subj_0 = subj_0,
+    trial_0 = trial_0,
+    sigma = sigma,
+    truncNegNums = truncNegNums
+  )
+  
+  # extract results
+  results <- sim$modelResults %>% 
+    mutate(simulation = n_sim)
+  
+  return(results)
+  
+}
+
+```
+
+#  {.sidebar}
+
+```{r}
+
+sliderInput(
+  inputId = "n_subj",
+  label = "Number of subjects",
+  min = 10,
+  max = 200,
+  value = 50,
+  step = 10
+)
+
+sliderInput(
+  inputId = "n_trial",
+  label = "Number of trials",
+  min = 1,
+  max = 81,
+  value = 9
+)
+
+sliderInput(
+  inputId = "beta_0",
+  label = "Grand intercept (seconds)",
+  min = 1,
+  max = 5,
+  value = 3.5,
+  step = 0.1,
+)
+
+sliderInput(
+  inputId = "beta_p",
+  label = "Effect of political orientation (seconds)",
+  min = -2,
+  max = 2,
+  value = 0.10,
+  step = 0.10
+)
+
+sliderInput(
+  inputId = "subj_0",
+  label = "By-subject random intercept SD",
+  min = 0,
+  max = 2,
+  value = 0.50,
+  step = 0.10
+)
+
+sliderInput(
+  inputId = "trial_0",
+  label = "By-trial random intercept SD",
+  min = 0,
+  max = 2,
+  value = 0.50,
+  step = 0.10
+)
+
+sliderInput(
+  inputId = "sigma",
+  label = "Residual (error) SD",
+  min = 0,
+  max = 2,
+  value = 0.10,
+  step = 0.10
+)
+```
+
+# Data Simulation
+
+## Action Button {height="7.5%"}
+
+```{r}
+actionButton(
+  inputId = "simulateButton",
+  label = "Simulate data (once)"
+)
+```
+
+## Subjects and Groups Plots
+
+```{r}
+#| title: Subjects
+
+plotOutput(
+  outputId = "simData_subjects"
+)
+```
+
+```{r}
+#| title: Groups
+
+plotOutput(
+  outputId = "simData_groups"
+)
+```
+
+## tab_model Output
+
+```{r}
+#| title: Results
+
+htmlOutput(
+  outputId = "sjPlotTable"
+)
+```
+
+```{r}
+#| context: server
+
+# simulate data
+simData <- eventReactive(input$simulateButton, {
+  FUN_sim_dtCarbon(
+    n_subj = isolate(input$n_subj),
+    n_trial = isolate(input$n_trial),
+    beta_0 = isolate(input$beta_0),
+    beta_p = isolate(input$beta_p),
+    subj_0 = isolate(input$subj_0),
+    trial_0 = isolate(input$trial_0),
+    sigma = isolate(input$sigma)
+  )
+})
+```
+
+```{r}
+#| context: server
+
+# create plot_simData_subjects
+output$simData_subjects <- renderPlot({
+  
+  req(simData())
+  
+  # create custom order of subjects
+  subj_order <- simData()$dataSim %>% 
+    group_by(subj, polOri) %>% 
+    summarise(mean_dwellTime = mean(dwellTime)) %>% 
+    arrange(polOri, mean_dwellTime) %>% 
+    pull(subj)
+  
+  # create plot
+  plot_simData_subjects <- simData()$dataSim %>% 
+    mutate(subj = factor(subj, levels = subj_order)) %>% 
+    ggplot(aes(x = subj, y = dwellTime, color = polOri)) +
+    geom_hline(
+      yintercept = simData()$dataSim %>% 
+        pull(dwellTime) %>% 
+        mean()
+    ) +
+    geom_hline(
+      yintercept = simData()$dataSim %>%
+        filter(polOri == "rep") %>%
+        pull(dwellTime) %>% 
+        mean(),
+      color = "red",
+      linetype = "dashed"
+    ) +
+    geom_hline(
+      yintercept = simData()$dataSim %>%
+        filter(polOri == "dem") %>%
+        pull(dwellTime) %>% 
+        mean(),
+      color = "dodgerblue",
+      linetype = "dashed"
+    ) +
+    stat_summary(
+      fun = mean,
+      fun.min = \(x){mean(x) - sd(x)},
+      fun.max = \(x){mean(x) + sd(x)}
+    ) +
+    scale_color_manual(values = c("red", "dodgerblue")) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    coord_cartesian(ylim = c(0, 6)) +
+    theme_minimal() +
+    theme(
+      panel.grid.major.x = element_blank(),
+      axis.text.x = element_blank(),
+      text = element_text(size = TEXT_SIZE)
+    )
+  
+  return(plot_simData_subjects)
+  
+})
+```
+
+```{r}
+#| context: server
+
+# create plot_simData_groups
+
+output$simData_groups <- renderPlot({
+  
+  req(simData())
+  
+  plot_simData_groups <- simData()$dataSim %>% 
+    ggplot(aes(x = polOri, y = dwellTime, color = polOri)) +
+    stat_halfeye(
+      mapping = aes(fill = polOri),
+      point_interval = NULL,
+      width = .6,
+      .width = 0,
+      justification = -.25
+    ) +
+    geom_point(
+      size = 1,
+      alpha = .2,
+      position = position_jitter(seed = 1, width = .1, height = 0)
+    ) +
+    geom_boxplot(
+      width = .10,
+      outliers = FALSE,
+      position = position_nudge(x = -.2)
+    ) +
+    scale_color_manual(values = c("red", "dodgerblue")) +
+    scale_fill_manual(values = c("red", "dodgerblue")) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    coord_cartesian(ylim = c(0, 6)) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      panel.grid.major.x = element_blank(),
+      text = element_text(size = TEXT_SIZE)
+    )
+  
+  return(plot_simData_groups)
+  
+})
+```
+
+```{r}
+#| context: server
+
+models <- reactive({
+  
+  req(simData())
+  
+  modelLmer <- simData()$modelLmer
+  dataReg <- simData()$dataSim %>% 
+    group_by(subj) %>% 
+    mutate(dwellTime_mean = mean(dwellTime)) %>% 
+    ungroup() %>% 
+    distinct(subj, polOri, dwellTime_mean)
+  modelLm <- lm(
+    dwellTime_mean ~ polOri,
+    data = dataReg
+  )
+  return(list(
+    modelLmer = modelLmer,
+    modelLm = modelLm
+  ))
+})
+
+output$sjPlotTable <- renderUI({
+  
+  req(simData())
+  
+  html <- sjPlot::tab_model(
+    models()$modelLmer,
+    models()$modelLm,
+    dv.labels = c("dwell time<br>mixed-model", "dwell time<br>aggr. trials (≈ t-test)"),
+    digits = 4, digits.p = 4, digits.re = 4
+  )
+  HTML(html$knitr)
+})
+
+# output$sjPlotTable <- renderUI({
+#   model <- lmer(dwellTime ~ polOri + (1|subj) + (1|trial), data = simData()$dataSim)
+#   html <- sjPlot::tab_model(model)
+#   HTML(html$knitr)
+# })
+```
+
+# Power Simulation
+
+## Inputs and Value Boxes {height="25%"}
+
+```{r}
+sliderInput(
+  inputId = "n_sim",
+  label = "N simulations",
+  value = 100,
+  min = 50,
+  max = 1000,
+  step = 50
+)
+
+selectInput(
+  inputId = "alpha_level",
+  label = "alpha level",
+  choices = c(0.1, 0.05, 0.01, 0.001),
+  selected = 0.05
+)
+
+actionButton(
+  inputId = "simulatePowerButton",
+  label = "Simulate power"
+)
+```
+
+```{r}
+value_box(
+  id = "valueBox1",
+  title = "Mean Estimated Effect of Political Orientation",
+  value = textOutput("valueBox1_eff"),
+  theme = "primary",
+  showcase = bs_icon("arrows-collapse-vertical")
+)
+```
+
+```{r}
+value_box(
+  id = "valueBox2",
+  title = "Power to Detect Effect of Political Orientation",
+  value = textOutput("valueBox2_power"),
+  theme = "bg-success",
+  showcase = bs_icon("search")
+)
+```
+
+## Histograms
+
+```{r}
+#| content: card-toolbar
+
+sliderInput(
+  inputId = "n_bins",
+  label = "bins",
+  min = 10,
+  max = 30,
+  value = 15,
+  step = 1
+)
+```
+
+```{r}
+#| title: Distribution of fixed and random effects
+
+plotOutput(
+  outputId = "plotDistrEffSizes"
+)
+```
+
+## Density Plot
+
+```{r}
+#| title: Distribution of p-values for the effect of Political Orientation
+
+plotOutput(
+  outputId = "plotDistrPValues"
+)
+```
+
+```{r}
+#| context: server
+
+# simulate power
+simPower <- eventReactive(input$simulatePowerButton, {
+  
+  # create simulated data
+  simData <- map_df(
+    1:input$n_sim, 
+    ~FUN_powerSim(
+      n_sim = isolate(input$n_sim),
+      n_subj = isolate(input$n_subj),
+      n_trial = isolate(input$n_trial),
+      beta_0 = isolate(input$beta_0),
+      beta_p = isolate(input$beta_p),
+      subj_0 = isolate(input$subj_0),
+      trial_0 = isolate(input$trial_0),
+      sigma = isolate(input$sigma)
+    )
+  ) %>% 
+    mutate(name = case_when(
+      effect == "fixed" & term == "(Intercept)" ~ "fixed intercept",
+      effect == "fixed" & term == "polOri.dem-rep" ~ "fixed polOri",
+      effect == "ran_pars" & group == "subj" & term == "sd__(Intercept)" ~ "by-subj rand intercept SD",
+      effect == "ran_pars" & group == "trial" & term == "sd__(Intercept)" ~ "by-trial rand intercept SD",
+      effect == "ran_pars" & group == "Residual" & term == "sd__Observation" ~ "error SD"
+    ) %>% factor(., levels = c("fixed intercept", "fixed polOri",
+                               "by-subj rand intercept SD", "by-trial rand intercept SD", "error SD")))
+  
+  # create some additional data sets needed for plots
+  
+  # create data for Plot
+  dataForPlot <- simData %>% 
+    filter(name == "fixed polOri") %>% 
+    mutate(p.value.log = -log10(p.value))
+  
+  # calculate true positive rate, i.e., power (1 - beta)
+  # and false negative rate, i.e., type II error (beta)
+  powerData <- tibble(
+    truePositive = round(mean(dataForPlot$p.value < as.double(input$alpha_level)) * 100, 2) %>%
+      format(nsmall = 2) %>% 
+      paste0(., "%"),
+    falseNegative = round(mean(dataForPlot$p.value >= as.double(input$alpha_level)) * 100, 2) %>% 
+      format(nsmall = 2) %>% 
+      paste0(., "%")
+  )
+  
+  # calculate some data for displaying p values in a density plot
+  dens <- density(dataForPlot$p.value.log)
+  dataForDensity <- tibble(
+      x = dens$x,
+      y = dens$y
+    ) %>% 
+      mutate(significance = case_when(
+        x <= -log10(as.double(input$alpha_level)) ~ "notSignificant",
+        x > -log10(as.double(input$alpha_level)) ~ "significant"
+      ))
+  transitionPoint <- dataForDensity %>% 
+    mutate(nextSignificance = lead(significance)) %>% 
+    filter(significance == "notSignificant", nextSignificance == "significant")
+  
+  return(list(
+    simData = simData,
+    dataForPlot = dataForPlot,
+    powerData = powerData,
+    dataForDensity = dataForDensity,
+    transitionPoint = transitionPoint
+  ))
+  
+})
+
+# save output for value boxes
+output$valueBox1_eff <- renderText({
+  req(simPower())
+  eff_mean <- mean(simPower()$dataForPlot$estimate) %>% 
+    round(., digits = 4) %>% 
+    format(., nsmall = 4)
+  # eff_sd <- sd(simPower()$dataForPlot$estimate) %>% 
+  #   round(., digits = 4) %>% 
+  #   format(., nsmall = 4)
+  # paste0(eff_mean, " ± ", eff_sd)
+  eff_mean
+})
+
+output$valueBox2_power <- renderText({
+  req(simPower())
+  simPower()$powerData$truePositive
+})
+```
+
+```{r}
+#| context: server
+
+output$plotDistrEffSizes <- renderPlot({
+  
+  req(simPower())
+  
+  simPower()$simData %>% 
+    ggplot(aes(x = estimate, fill = name)) +
+  geom_histogram(bins = input$n_bins, color = "black", alpha = 1) +
+  scale_x_continuous(
+    breaks = scales::breaks_extended(10)
+  ) +
+  scale_fill_manual(values = c("darkgrey", "#0e6ffd", rep("darkgrey", 3))) +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    text = element_text(size = TEXT_SIZE)
+  ) +
+  facet_wrap(~name, scales = "free_x")
+})
+```
+
+```{r}
+#| context: server
+
+output$plotDistrPValues <- renderPlot({
+  
+  req(simPower())
+  
+  simPower()$dataForDensity %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_line() +
+    geom_area(
+      data = filter(simPower()$dataForDensity, significance == "notSignificant"),
+      fill = "red"
+    ) +
+    geom_area(
+      data = filter(simPower()$dataForDensity, significance == "significant"),
+      fill = "darkgreen"
+    ) +
+    # geom_vline(xintercept = -log10(0.05), color = "black", size = 2) +
+    # annotate(geom = "label", x = -log10(0.05), y = +Inf, label = "p = 0.05\n-log10(p) = 1.3", vjust = 2) +
+    annotate(
+      geom = "label", x = -log10(as.double(input$alpha_level)) - .1, y = simPower()$transitionPoint$y/5,
+      label = simPower()$powerData$falseNegative, hjust = "right"
+    ) +
+    annotate(
+      geom = "label", x = -log10(as.double(input$alpha_level)) + .1, y = simPower()$transitionPoint$y/5,
+      label = simPower()$powerData$truePositive, hjust = "left"
+    ) +
+    geom_rug(
+      data = simPower()$dataForPlot,
+      mapping = aes(x = p.value.log, y = NULL),
+      sides = "b",
+      alpha = .1
+    ) +
+    labs(x = "-log10(p)", y = "density") +
+    scale_x_continuous(
+      breaks = sapply(c(1, 0.1, 0.05, 10^-seq(2, 10, 1)), \(x){-log10(x)}),
+      labels = paste0(
+        sapply(c(1, 0.1, 0.05, 10^-seq(2, 10, 1)), \(x){round(-log10(x), 2)}),
+        "\n(p = ",
+        c(1, 0.1, 0.05, 10^-seq(2, 10, 1)),
+        ")"
+      )
+    ) +
+    theme_classic() +
+    theme(text = element_text(size = TEXT_SIZE))
+  
+})
+```

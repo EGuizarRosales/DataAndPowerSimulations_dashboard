@@ -1,0 +1,14 @@
+name: dataAndPowerSimulations_dashboard_2
+title: dataAndPowerSimulations_dashboard_2
+username: eguizarrosales
+account: eguizarrosales
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12170002
+bundleId: 8737727
+url: https://eguizarrosales.shinyapps.io/dataAndPowerSimulations_dashboard_2/
+version: 1
+quarto_version: 1.5.45
+quarto_engines: knitr
+asMultiple: FALSE
+asStatic: FALSE
